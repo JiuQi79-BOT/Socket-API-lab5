@@ -79,6 +79,20 @@ void save_licenses() {
     file.close();
 }
 
+void save_active_clients() {
+    std::ofstream file(ACTIVE_CLIENTS_FILE);
+    if (!file.is_open()) return;
+    
+    for (auto& pair : clients) {
+        ClientInfo& client = pair.second;
+        file << client.serial_number << "|" 
+             << client.client_id << "|" 
+             << client.client_ip << "|" 
+             << client.last_heartbeat << std::endl;
+    }
+    file.close();
+}
+
 bool validate_serial(const std::string& serial, int& max_users, int& current_users) {
     std::lock_guard<std::mutex> lock(licenses_mutex);
     auto it = licenses.find(serial);
@@ -125,6 +139,7 @@ void cleanup_dead_clients() {
                 update_current_users(it->second.serial_number, -1);
                 std::cout << "Client timeout, license released: " << it->second.serial_number << std::endl;
                 clients.erase(it);
+                save_active_clients();
             }
         }
     }
@@ -143,6 +158,7 @@ void handle_client(SOCKET client_socket, sockaddr_in client_addr) {
                 std::string serial = clients[client_socket].serial_number;
                 update_current_users(serial, -1);
                 clients.erase(client_socket);
+                save_active_clients();
             }
             closesocket(client_socket);
             return;
@@ -154,9 +170,16 @@ void handle_client(SOCKET client_socket, sockaddr_in client_addr) {
         std::string response;
         if (request.find("AUTH:") == 0) {
             std::string serial = request.substr(5);
+            std::cout << "\n=== [认证请求] ===" << std::endl;
+            std::cout << "客户端IP: " << client_ip << std::endl;
+            std::cout << "请求类型: 许可证认证" << std::endl;
+            std::cout << "提交序列号: " << serial << std::endl;
             
             int max_users, current_users;
             if (validate_serial(serial, max_users, current_users)) {
+                std::cout << "序列号验证: 通过" << std::endl;
+                std::cout << "许可容量: " << current_users << "/" << max_users << std::endl;
+                
                 if (current_users < max_users) {
                     update_current_users(serial, 1);
                     
@@ -165,13 +188,19 @@ void handle_client(SOCKET client_socket, sockaddr_in client_addr) {
                     {
                         std::lock_guard<std::mutex> lock(clients_mutex);
                         clients[client_socket] = {serial, client_id, client_ip, time(nullptr)};
+                        save_active_clients();
                     }
                     
+                    std::cout << "生成客户端ID: " << client_id << std::endl;
+                    std::cout << "认证结果: 成功" << std::endl;
                     response = "OK:" + client_id;
                 } else {
+                    std::cout << "认证结果: 失败 - 许可证已达最大使用人数" << std::endl;
                     response = "DENY:Max users exceeded";
                 }
             } else {
+                std::cout << "序列号验证: 失败 - 无效序列号" << std::endl;
+                std::cout << "认证结果: 失败" << std::endl;
                 response = "DENY:Invalid serial number";
             }
         } else if (request.find("HEARTBEAT:") == 0) {
@@ -181,6 +210,7 @@ void handle_client(SOCKET client_socket, sockaddr_in client_addr) {
             auto it = clients.find(client_socket);
             if (it != clients.end() && it->second.client_id == client_id) {
                 it->second.last_heartbeat = time(nullptr);
+                save_active_clients();
                 response = "OK";
             } else {
                 response = "DENY:Unauthorized client";
@@ -193,6 +223,7 @@ void handle_client(SOCKET client_socket, sockaddr_in client_addr) {
             if (it != clients.end() && it->second.client_id == client_id) {
                 update_current_users(it->second.serial_number, -1);
                 clients.erase(it);
+                save_active_clients();
                 response = "OK";
             } else {
                 response = "DENY:Invalid release request";
@@ -210,6 +241,9 @@ void handle_client(SOCKET client_socket, sockaddr_in client_addr) {
 }
 
 int main() {
+    // 设置控制台输出为UTF-8编码，解决中文乱码问题
+    SetConsoleOutputCP(CP_UTF8);
+    
     WSADATA wsa_data;
     if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
         std::cerr << "WSAStartup failed" << std::endl;

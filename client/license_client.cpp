@@ -56,30 +56,44 @@ bool connect_to_server() {
 }
 
 bool authenticate() {
+    std::cout << "\n=== [许可证认证流程] ===" << std::endl;
+    std::cout << "步骤1/3: 构造认证请求" << std::endl;
+    std::cout << "         请求格式: AUTH:<序列号>" << std::endl;
+    std::cout << "         发送内容: AUTH:" << serial_number << std::endl;
+    
     std::string request = "AUTH:" + serial_number;
     
     std::lock_guard<std::mutex> lock(socket_mutex);
     if (send(client_socket, request.c_str(), request.length(), 0) == SOCKET_ERROR) {
-        std::cerr << "Failed to send auth request: " << WSAGetLastError() << std::endl;
+        std::cerr << "发送失败: " << WSAGetLastError() << std::endl;
         return false;
     }
+    
+    std::cout << "步骤2/3: 等待服务器响应..." << std::endl;
     
     char buffer[BUFFER_SIZE];
     int bytes_received = recv(client_socket, buffer, BUFFER_SIZE, 0);
     if (bytes_received <= 0) {
-        std::cerr << "Failed to receive response: " << WSAGetLastError() << std::endl;
+        std::cerr << "接收失败: " << WSAGetLastError() << std::endl;
         return false;
     }
     
     buffer[bytes_received] = '\0';
     std::string response(buffer);
     
+    std::cout << "步骤3/3: 解析服务器响应" << std::endl;
+    std::cout << "         响应内容: " << response << std::endl;
+    
     if (response.find("OK:") == 0) {
         client_id = response.substr(3);
-        std::cout << "Authentication successful! Client ID: " << client_id << std::endl;
+        std::cout << "\n[认证成功]" << std::endl;
+        std::cout << "├─ 服务器已验证序列号有效性" << std::endl;
+        std::cout << "├─ 许可证容量充足" << std::endl;
+        std::cout << "└─ 授予客户端ID: " << client_id << std::endl;
         return true;
     } else if (response.find("DENY:") == 0) {
-        std::cerr << "Authentication failed: " << response.substr(5) << std::endl;
+        std::cerr << "\n[认证失败]" << std::endl;
+        std::cerr << "└─ 原因: " << response.substr(5) << std::endl;
         return false;
     }
     
@@ -141,6 +155,9 @@ BOOL WINAPI console_handler(DWORD signal) {
 }
 
 int main(int argc, char* argv[]) {
+    // 设置控制台输出为UTF-8编码，解决中文乱码问题
+    SetConsoleOutputCP(CP_UTF8);
+    
     if (argc != 3) {
         std::cerr << "Usage: " << argv[0] << " <ServerIP> <SerialNumber>" << std::endl;
         return 1;
